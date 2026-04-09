@@ -211,7 +211,7 @@ function TetrisBoard({ playerName, onExit, isPausedExtra, volume, setVolume }: {
                 <div key={y} className="flex">
                   {row.map((cell, x) => {
                     const isGhost = typeof cell === 'string' && cell.startsWith('ghost-');
-                    const cellColor = isGhost ? cell.replace('ghost-', '') : cell;
+                    const cellColor = (isGhost ? (cell as string).replace('ghost-', '') : (cell as string)) || 'transparent';
                     const isFilled = typeof cell === 'string' && cell !== '' && !isGhost;
 
                     return (
