@@ -26,6 +26,8 @@ function TetrisBoard({ playerName, onExit, isPausedExtra, volume, setVolume }: {
   }, [isPaused, isPausedExtra]);
 
   const [rankings, setRankings] = useState<{name: string, finishtime: string}[] | null>(null);
+  const [rankingError, setRankingError] = useState(false);
+  const [rankingRetryFn, setRankingRetryFn] = useState<(() => void) | null>(null);
 
   // Combine board and active piece for rendering
   const renderBoard = board.map((row) => [...row]);
@@ -114,10 +116,47 @@ function TetrisBoard({ playerName, onExit, isPausedExtra, volume, setVolume }: {
 
   useEffect(() => {
     if (isVictory) {
-      const saveAndFetchScore = async () => {
-        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyLq8pfjQzNQKkQehj1QvIKad-6hOGF5tu6n52hbj881cwE5BUyMNLD4VYBWaEMRZ7B/exec";
+      const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyLq8pfjQzNQKkQehj1QvIKad-6hOGF5tu6n52hbj881cwE5BUyMNLD4VYBWaEMRZ7B/exec";
 
-        if (!SCRIPT_URL.startsWith("https://script.google.com")) return;
+      if (!SCRIPT_URL.startsWith("https://script.google.com")) return;
+
+      const fetchRanking = async (retries = 3, delay = 1500): Promise<void> => {
+        const fetchParams = new URLSearchParams({ action: "getRanking" });
+        for (let attempt = 1; attempt <= retries; attempt++) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 8000);
+            
+            const response = await fetch(`${SCRIPT_URL}?${fetchParams.toString()}`, {
+              method: 'GET',
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const rankingData = await response.json();
+            
+            if (Array.isArray(rankingData)) {
+              setRankings(rankingData);
+              setRankingError(false);
+              return;
+            } else {
+              throw new Error("Invalid ranking data format");
+            }
+          } catch (e) {
+            console.warn(`랭킹 로드 시도 ${attempt}/${retries} 실패:`, e);
+            if (attempt < retries) {
+              await new Promise(resolve => setTimeout(resolve, delay * attempt));
+            }
+          }
+        }
+        // 모든 재시도 실패
+        setRankingError(true);
+      };
+
+      const saveAndFetchScore = async () => {
+        setRankings(null);
+        setRankingError(false);
 
         const saveParams = new URLSearchParams({
           action: "saveScore",
@@ -125,36 +164,35 @@ function TetrisBoard({ playerName, onExit, isPausedExtra, volume, setVolume }: {
           finishtime: formatTime(time)
         });
 
-        const fetchParams = new URLSearchParams({
-          action: "getRanking"
-        });
-
+        // 점수 저장 (no-cors) - 실패해도 랭킹 조회는 진행
         try {
-          // 1. 점수 저장 (no-cors 사용)
           await fetch(`${SCRIPT_URL}?${saveParams.toString()}`, {
             method: 'GET',
             mode: 'no-cors'
           });
-          
-          // 약간의 딜레이 보장 (시트에 쓰이는 시간 대기)
-          await new Promise(resolve => setTimeout(resolve, 1000));
-
-          // 2. 랭킹 불러오기 (JSON 받기위해 cors 허용)
-          const response = await fetch(`${SCRIPT_URL}?${fetchParams.toString()}`, {
-            method: 'GET'
-          });
-          
-          const rankingData = await response.json();
-          setRankings(rankingData);
-          
         } catch (e) {
-          console.error("구글 시트 연동 오류:", e);
+          console.warn("점수 저장 요청 실패 (무시하고 랭킹 조회 진행):", e);
         }
+
+        // Google Sheets 쓰기 전파 대기
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // 랭킹 조회 (재시도 포함)
+        await fetchRanking();
       };
+
+      // 수동 재시도 함수 등록
+      setRankingRetryFn(() => () => {
+        setRankings(null);
+        setRankingError(false);
+        fetchRanking(2, 1000);
+      });
 
       saveAndFetchScore();
     } else if (!isVictory && !isGameOver) {
       setRankings(null);
+      setRankingError(false);
+      setRankingRetryFn(null);
     }
   }, [isVictory, isGameOver, playerName, time]);
 
@@ -313,6 +351,16 @@ function TetrisBoard({ playerName, onExit, isPausedExtra, volume, setVolume }: {
                         <span className="text-white font-bold tracking-widest">{rk.finishtime}</span>
                       </div>
                     ))}
+                  </div>
+                ) : rankingError ? (
+                  <div className="flex flex-col items-center gap-3 py-3">
+                    <div className="text-xs text-red-400/80 text-center tracking-wider uppercase">랭킹 로드 실패</div>
+                    <button
+                      onClick={() => rankingRetryFn?.()}
+                      className="px-5 py-2 text-[10px] font-bold uppercase tracking-widest text-[#87ceeb] border border-[#87ceeb]/30 bg-[#87ceeb]/5 hover:bg-[#87ceeb]/15 hover:border-[#87ceeb]/60 transition-all outline-none"
+                    >
+                      다시 시도
+                    </button>
                   </div>
                 ) : (
                   <div className="text-xs text-white/50 animate-pulse text-center py-4 tracking-widest uppercase">Loading Core Data...</div>
